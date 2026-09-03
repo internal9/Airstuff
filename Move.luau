@@ -92,8 +92,8 @@ end
 
 -- simply move to velocity's normal vector (direction), don't confuse with in direction of a position or wahtever
 local function step_move(plane: MeshPart, scaled_vel: Vector3, scaled_angular_vel: Vector3, delta_time: number)
-	--plane.Position += scaled_vel * delta_time
-	plane.Orientation += scaled_angular_vel * 180/math.pi * delta_time
+--	plane.Position += scaled_vel * delta_time
+--	plane.Orientation += scaled_angular_vel * 180/math.pi * delta_time
 --	warn(scaled_angular_vel)
 
 	local new_x, new_y, new_z = Grid3D.to_cell_coords(grid.cell_size, plane.Position)
@@ -111,37 +111,31 @@ local function step(delta_time: number)
 	
 	for id, plane_model, goal_direction in planes do
 		--goal_direction = rotate_vector3_around(Vector3.zAxis, math.rad(45), Vector3.yAxis)
-		goal_direction = Vector3.xAxis
+		goal_direction = Vector3.zAxis
 		
 		local x1, y1, z1 = Grid3D.to_cell_coords(grid.cell_size, plane_model.Position)
 		
 		-- instead of flaps, just clamp the goal dir into a cframe and calculate using that
-		local current_vel = world:get(id, components.Velocity)
-		local current_angular_vel = world:get(id, components.AngularVelocity)
+		local current_vel = world:get(id, components.WorldVelocity)
+		local current_angular_vel = world:get(id, components.WorldAngularVelocity)
 		
 		local goal_cf = get_goal_cf(plane_model, goal_direction, delta_time)
 		
-		local new_vel, new_angular_vel = Physics.get_velocity(
+		local new_vel, new_angular_vel = Physics.update_movement(
 			current_vel,
 			current_angular_vel,
 			plane_model.CFrame,
-			goal_cf,
 			plane_model.Name, 
 			1,
 			delta_time
 		)
 		
-		require("../Modules/Vector3Visualizer").visualize(
-			plane_model.Position, current_vel.Unit * 10, Color3.new(1, 1, 1)
-		)
-		require("../Modules/Vector3Visualizer").visualize(
-			plane_model.Position + Vector3.yAxis * 2, 
-			goal_cf.LookVector * 10,
-			Color3.new()
-		)
+		--require("../Modules/Vector3Visualizer").visualize(
+		--	plane_model.Position, current_vel.Unit * 10, Color3.new(1, 1, 1)
+		--)
 		
-		world:set(id, components.Velocity, new_vel)
-		world:set(id, components.AngularVelocity, new_angular_vel)
+		--world:set(id, components.WorldVelocity, new_vel)
+		--world:set(id, components.WorldAngularVelocity, new_angular_vel)
 		
 		local scaled_world_new_vel = new_vel * Constants.METER_TO_STUD_SCALED
 		local scaled_world_new_angular_vel = new_angular_vel * Constants.METER_TO_STUD_SCALED
