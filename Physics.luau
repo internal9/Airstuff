@@ -1,4 +1,7 @@
--- Half-assisted AI, tanks
+--[[
+	MAYBE ACCOUNT FOR ROBLOX AUTP HYSICS THROTTLING!! (AUTO CHANGES FRAMERATE)
+	MORE CONTROL 
+]]
 --!optimize 2
 
 local PlaneInfos = require("../Info/[INTERMEDIATE PHYSICS] PlaneInfos")
@@ -63,10 +66,11 @@ end
 		- Thus, allows for anhedral / dihedral simulation & wing angle imbalances
 	
 	SIMPLIFICATIONS:
-		- Relative wind is simplified to flight_dir, no external weather wind whatsoever
+		- Relative wind is simplified to flight_dir, no external weather wind whatsoever,
+		BUT similarly to relative wind, opposes flight path
 ]]
 local function get_AoA(local_current_flight_dir: Vector3)
-	return math.atan2(-local_current_flight_dir.Y, local_current_flight_dir.Z)
+	return math.atan2(local_current_flight_dir.Y, local_current_flight_dir.Z)
 end
 
 local function get_AoA_old(ref_cf: CFrame, world_flight_dir: Vector3)
@@ -83,7 +87,7 @@ local function get_dynamic_pressure(speed: number): number
 	return 0.5 * AIR_DENSITY * (speed * speed)
 end
 
-local function get_induced_drag_coeff(lift_coeff: number, aspect_ratio: number, oswald_eff_factor: number ): number
+local function get_induced_drag_coeff(lift_coeff: number, aspect_ratio: number, oswald_eff_factor: number): number
 	if aspect_ratio <= EPSILON or oswald_eff_factor <= EPSILON then return 0 end
 	return (lift_coeff * lift_coeff) / (math.pi * oswald_eff_factor * aspect_ratio)
 end
@@ -108,7 +112,6 @@ end
 local function get_lift_coeff(AoA: number, lift_coeff_vs_AoA_curve: FloatCurve): number
 	-- FloatCurve is periodic conceptually in the intended model,
 	-- but only evaluate the aerodynamic range we actually support.
-	-- PROB TEMP
 	return lift_coeff_vs_AoA_curve:GetValueAtTime(AoA)
 end
 
@@ -138,32 +141,6 @@ local function get_thrust(max_thrust: number, unit_throttle: number): number
 	unit_throttle = math.clamp(unit_throttle, 0, 1)
 	-- Quadratic throttle -> thrust approximation.
 	return max_thrust * (unit_throttle * unit_throttle)
-end
-
-local function get_lift_direction(goal_cf: CFrame, flight_dir: Vector3): Vector3
-	local plane_up = goal_cf.UpVector
-
-	-- Project aircraft UpVector onto the plane perpendicular
-	-- to velocity.
-	local projected_up =
-		plane_up
-	- flight_dir * plane_up:Dot(flight_dir)
-
-	local magnitude = projected_up.Magnitude
-
-	if magnitude > EPSILON then
-		return projected_up / magnitude
-	end
-
-	-- Degenerate case: velocity almost parallel to UpVector.
-	local right = goal_cf.RightVector
-	local fallback = right:Cross(flight_dir)
-
-	if fallback.Magnitude > EPSILON then
-		return fallback.Unit
-	end
-
-	return Vector3.yAxis
 end
 
 local function get_mach(speed: number): number
@@ -216,8 +193,19 @@ local function get_offseted_force_result(
 	return linear_accel, angular_accel
 end
 
-local function apply_force_at_offset()
-	
+-- TODO (?): Apply force & torque THEN get linear & angular acceleration for less calculations
+
+--[[
+	--TEMP SIMPLE TEST
+	- no inertia tensor, just really basic approximation
+	- no gyroscopic torque
+]]
+local function add_force_at_offset_local(local_force: number, mass: number, local_offset_cf: CFrame)
+	local local_linear_accel = local_force / mass
+	local torque = local_offset_cf.Position:Cross(local_force)
+	-- Inertia for single point spinning around an axis at a distance of 'local_offset_cf.Position.Magnitude'
+	local local_angular_accel = torque / (mass * local_offset_cf.Position.Magnitude * local_offset_cf.Position.Magnitude)
+	return local_linear_accel, local_angular_accel
 end
 
 --[[
@@ -226,43 +214,70 @@ end
 	
 	- local_CoA_cf, positive +Z positional component is backwards from CoA, as -Z is lookVector / forwards dir 
 ]]
-local function apply_wing_aerodynamics(wing_info: PlaneInfos.WingInfo, world_current_linear_vel: Vector3): (Vector3, Vector3)
-	local local_linear_accel: Vector3, local_angular_accel: Vector3
+local function apply_wing_aerodynamics(
+	plane_cf: CFrame,
+	wing_info: PlaneInfos.WingInfo,
+	world_current_linear_vel: Vector3
+): (Vector3, Vector3)
+	
+	local local_linear_accel, local_angular_accel = Vector3.zero, Vector3.zero
 	-- cf relative to CoM
-	local local_wing_cf = wing_info.local_CoA_cf
+	local local_wing_cf = plane_cf * wing_info.local_CoA_cf
+	
 	-- perpendicular to chord line (SIMPLIFIED to LookVector in this case)
 	
 	-- local vel's difference is that it has a direction relative to reference CF
-	local local_current_linear_vel = local_wing_cf:VectorToObjectSpace(world_current_linear_vel)
+	-- 'world_current_linear_vel' negated for some weird cf stuff
+	local local_current_linear_vel = local_wing_cf:VectorToObjectSpace(-world_current_linear_vel)
 	local local_current_speed = local_current_linear_vel.Magnitude
 	
 	local dynamic_pressure = get_dynamic_pressure(local_current_speed)
 	local AoA = math.clamp(get_AoA(local_current_linear_vel.Unit), wing_info.min_aoa, wing_info.max_aoa)
 	local lift_coeff = get_lift_coeff(AoA, wing_info.lift_coeff_vs_AoA_curve)
 	
-	local drag_dir = -local_current_linear_vel.Unit
+	warn(math.deg(AoA), local_current_linear_vel)
+	
+	local drag_dir = local_current_linear_vel.Unit
 	-- lift is perpendicular to drag
 	-- 1st Cross product to get rightVector, 2nd to get perpendicular to linear vel
 	-- Prob could just simplify via CFrame.Angles, fromAxisAngle, or other thing
-	local lift_dir = drag_dir:Cross(local_wing_cf.UpVector):Cross(drag_dir)
+	local lift_dir = -drag_dir:Cross(local_wing_cf.UpVector):Cross(-drag_dir)
 	
-	local lift_force = lift_dir * get_lift(lift_coeff, dynamic_pressure)
-	local drag_force = drag_dir * get_drag(wing_info.parasitic_drag_coeff, lift_coeff, dynamic_pressure)
+	local lift_force = lift_dir * get_lift(lift_coeff, dynamic_pressure, wing_info.area)
+	local drag_force = drag_dir * get_drag(
+		wing_info.parasitic_drag_coeff,
+		lift_coeff,
+		dynamic_pressure,
+		wing_info.area,
+		wing_info.aspect_ratio,
+		wing_info.oswald_eff_factor
+	)
+	
+	local la1, aa1 = add_force_at_offset_local(lift_force, wing_info.mass, local_wing_cf)
+	local la2, aa2 = add_force_at_offset_local(drag_force, wing_info.mass, local_wing_cf)
+	
+	-- TEMP SIMPLE TEST
+	local_linear_accel += la1 + la2
+	local_angular_accel += aa1 + aa2
+	
+	return
+		local_wing_cf:VectorToWorldSpace(local_linear_accel),
+		local_wing_cf:VectorToWorldSpace(local_angular_accel)
 end
 
 --[[
 	TEMP:
 ]]
-function Physics.steer_towards_dir(
+function Physics.update_movement(
 	world_current_linear_vel: Vector3,
 	world_current_angular_vel: Vector3,
 	plane_cf: CFrame,
-	goal_dir: Vector3,	-- treated like an instant cf after rotation, replacing flaps
+	--goal_dir: Vector3,	-- treated like an instant cf after rotation, replacing flaps
 	plane_name: string,
 	unit_throttle: number,
 	delta_time: number
 ): (Vector3, Vector3)
-
+	
 	local new_linear_vel: Vector3, new_angular_vel: Vector3 = Vector3.zero, Vector3.zero
 	local total_linear_accel: Vector3, total_angular_accel: Vector3 = Vector3.zero, Vector3.zero
 	
@@ -275,24 +290,27 @@ function Physics.steer_towards_dir(
 	local thrust_force = plane_cf.LookVector * physics_info.max_thrust * (unit_throttle * unit_throttle)
 	local weight_force = GRAVITY_ACCEL * mass
 
+	new_linear_vel += world_current_linear_vel + (total_linear_accel * delta_time)
 
 	-- Avoid divide by 0 errors for aerodynamic forces calculations.. anddd would probably be neglible anyways
 	if world_current_linear_vel.Magnitude <= EPSILON then
 		local total_force = thrust_force + weight_force
 		total_linear_accel = total_force / mass
-		new_linear_vel = world_current_linear_vel + (total_linear_accel * delta_time)
 		return new_linear_vel, world_current_angular_vel
 	end
 	
-	total_linear_accel, total_angular_accel = Vector3.zero, Vector3.zero
 	for _, wing_info in physics_info.wings do
-		local linear_accel, angular_accel = apply_wing_aerodynamics(wing_info, world_current_linear_vel)
+		-- TEMP
+		if wing_info._disabled == true then continue end
+		
+		-- accumulate world accel
+		local linear_accel, angular_accel = apply_wing_aerodynamics(plane_cf, wing_info, world_current_linear_vel)
 		total_linear_accel += linear_accel
 		total_angular_accel += angular_accel
 	end
 	
-	new_linear_vel += total_linear_accel * delta_time
-	new_angular_vel += total_angular_accel * delta_time
+	new_linear_vel += (total_linear_accel * delta_time)
+	new_angular_vel += (total_angular_accel * delta_time)
 	return new_linear_vel, new_angular_vel
 end
 
