@@ -1,5 +1,7 @@
 --[[
 	NOTES:
+	- CFrames are done in respect to -Z being forwards dir convention,
+	BUT for Vector3's, +Z is forwards dir, (important, especially when translating vector to object space)
 	- Plane's 'PivotOffset' should be set to their center of gravity (which is basically same as center of mass on Earth),
 		only plane's CoM is used, which ignores any extra payload (addons, etc)
 	- Max lift coeffs for modern jets ar areound 2 - 3
@@ -72,6 +74,8 @@ export type WingInfo = {
 	oswald_eff_factor: number,
 	--  May partially usee NACA Airfoil data
 	lift_coeff_vs_AoA_curve: FloatCurve,
+	-- Describes object's mass distribution & resistance to angular accel around x, y, z 
+	inertia_tensor: CFrame,
 	
 	-- Temp,
 	min_aoa: number,
@@ -100,6 +104,31 @@ end
 local function setup_aerodynamic_constants()
 
 end
+
+local function inertia_cube()
+	
+end
+
+-- Radius < length
+--local function inertia_slender_cylinder(mass, length)
+	
+--end
+
+--local function inertia_wing()
+	
+--end
+
+--local function approx_inertia_tensor(parts_infos)
+	
+--end
+
+--[[
+	- a more precise approximate would be to split plane into component infos (with own mass)
+	& make an inertia tensor
+]]
+--local function approx_inertia_tensor(mass, w)
+	
+--end
 
 local function curve_plot(set)
 	local plot = Instance.new("FloatCurve")
@@ -162,23 +191,32 @@ performance["f84g"] = {
 
 physics["f84g"] = {
 	-- Only lift & drag of wings are simulated, fuselage is ignored
+	-- subtract from wing weights, & this will encompass other weights where no indivudal object (e.g. engine)
 	mass = 8_457,
 	max_thrust = 25_000,
 
 	-- either rename terms for laterial axis, or have an array of 'wing' data types to encompass all wing surfaces
 
+--	inertia_tensor = approx_inertia_tensor(),
 	--critical_mach_number = 0,	-- do this? or just simplify to fixed values for all aircraft
 	-- basic flaps?
 	wings = {
 		-- Combined characteristics of the two main wings for simplicity
 		[header("Main Wings")] = {
+			_disabled = false,
+			
+			-- TODO: RECHECK LATER
+			-- UNUSED
+			-- (Individual main wing weight + full wingtip fuel tank) * # of individual main wings
+			mass = (500 + 696.72) * 2,
+			
 			-- temp var
 			aerodynamic_center = 0.834,
 			-- local to plane's CFrame
 			local_CoA_cf = CFrame.new(0, 0, 0.834),
 			
-			wing_area = 24.2,	--  flat 
-			wing_span = 11.1,		-- meters
+			area = 24.2,	--  flat 
+			span = 11.1,		-- meters
 			projected_wing_area = 24.2,	-- as viewed from top, confused
 			aspect_ratio = 5.1,	-- wing_span^2 / wing_area
 
@@ -215,8 +253,13 @@ physics["f84g"] = {
 		},
 
 		[header("Vertical Stabilizer")] = {
-			wing_area = 2.7,	-- m^2
-			wing_span = 2.05,	-- this case, refers to tip of stabilizer to fuselage or an approximate point (height?)
+			_disabled = true,
+			
+			-- TODO: RECHECK LATER
+			mass = 36,
+			
+			area = 2.7,	-- m^2
+			span = 2.05,	-- this case, refers to tip of stabilizer to fuselage or an approximate point (height?)
 			aspect_ratio = 1.556,
 			-- meters from plane's CoM (replace w/ CoA_cf?)
 			aerodynamic_center = 6.55,
@@ -246,6 +289,7 @@ physics["f84g"] = {
 			max_aoa = math.rad(32),
 		},		
 
+	-- [header("Horizontal Stabilizer")]
 	}
 }
 
