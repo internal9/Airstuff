@@ -69,15 +69,8 @@ end
 		- Relative wind is simplified to flight_dir, no external weather wind whatsoever,
 		BUT similarly to relative wind, opposes flight path
 ]]
-local function get_AoA(local_current_flight_dir: Vector3)
-	return math.atan2(local_current_flight_dir.Y, local_current_flight_dir.Z)
-end
-
-local function get_AoA_old(ref_cf: CFrame, world_flight_dir: Vector3)
-	-- flight dir relative to roation of 'ref_cf' 
-	local local_flight_dir = ref_cf:VectorToObjectSpace(world_flight_dir)
-	local AoA = math.atan2(-local_flight_dir.Y, local_flight_dir.Z)
-	return AoA
+local function get_AoA(relative_wind_local: Vector3)
+	return math.atan2(relative_wind_local.Y, relative_wind_local.Z)
 end
 
 -- ============================================================
@@ -165,48 +158,20 @@ local function visualize_force(
 	)
 end
 
-local function get_offseted_force_result(
-	cf: CFrame,
-	offset_local: Vector3,
-	force_world: Vector3,
-	mass: number
-): (Vector3, Vector3)
-
-	assert(mass > EPSILON, "Mass must be > 0")
-
-	-- Offset is supplied in aircraft-local coordinates.
-	local offset_world = cf:VectorToWorldSpace(offset_local)
-
-	-- Linear acceleration.
-	local linear_accel = force_world / mass
-
-	-- Torque must use vectors expressed in the same coordinate space.
-	local torque_world = offset_world:Cross(force_world)
-
-	-- NOTE:
-	-- This is only a placeholder approximation.
-	-- torque / mass is NOT physically correct angular acceleration.
-	--
-	-- Keep it here only if you're intentionally using a fake
-	-- angular response.
-	local angular_accel = torque_world / mass
-	return linear_accel, angular_accel
-end
-
 -- TODO (?): Apply force & torque THEN get linear & angular acceleration for less calculations
 
---[[
-	--TEMP SIMPLE TEST
-	- no inertia tensor, just really basic approximation
-	- no gyroscopic torque
-]]
-local function add_force_at_offset_local(local_force: number, mass: number, local_offset_cf: CFrame)
-	local local_linear_accel = local_force / mass
-	local torque = local_offset_cf.Position:Cross(local_force)
-	-- Inertia for single point spinning around an axis at a distance of 'local_offset_cf.Position.Magnitude'
-	local local_angular_accel = torque / (mass * local_offset_cf.Position.Magnitude * local_offset_cf.Position.Magnitude)
-	return local_linear_accel, local_angular_accel
+local function box_inertia_tensor(mass: number, size: Vector3)
+	local x = size.X
+	local y = size.Y
+	local z = size.Z
+
+	local Ixx = mass / 12 * (y*y + z*z)
+	local Iyy = mass / 12 * (x*x + z*z)
+	local Izz = mass / 12 * (x*x + y*y)
+
+	return Vector3.new(Ixx, Iyy, Izz)
 end
+
 
 --[[
 	- Figure if vel & angular vel need be reset after each loop step, prevent wrong accumulation
@@ -220,31 +185,48 @@ local function apply_wing_aerodynamics(
 	world_current_linear_vel: Vector3
 ): (Vector3, Vector3)
 	
-	local local_linear_accel, local_angular_accel = Vector3.zero, Vector3.zero
-	-- cf relative to CoM
-	local local_wing_cf = plane_cf * wing_info.local_CoA_cf
+	local wing_cf = plane_cf * wing_info.local_CoA_cf
+	--local speed = world_current_linear_vel.Magnitude
+
+	-- Relative wind.
+
+	-- Aircraft velocity points in the direction the aircraft is moving.
+	-- Aerodynamic drag opposes this, so use -velocity as the incoming
+	-- relative wind direction.
+	local relative_wind_world = -world_current_linear_vel
+	local relative_wind_local = wing_cf:VectorToObjectSpace(relative_wind_world)
+	local local_speed = relative_wind_local.Magnitude
 	
-	-- perpendicular to chord line (SIMPLIFIED to LookVector in this case)
+	-- Simplified AoA
+	-- The wing's local +Z is treated as the chord direction.
 	
-	-- local vel's difference is that it has a direction relative to reference CF
-	-- 'world_current_linear_vel' negated for some weird cf stuff
-	local local_current_linear_vel = local_wing_cf:VectorToObjectSpace(-world_current_linear_vel)
-	local local_current_speed = local_current_linear_vel.Magnitude
+	-- Depending on how your actual wing CFrames are authored, you may
+	-- need to flip the sign here.
+	local AoA = math.clamp(get_AoA(relative_wind_local.Unit), wing_info.min_aoa, wing_info.max_aoa)
 	
-	local dynamic_pressure = get_dynamic_pressure(local_current_speed)
-	local AoA = math.clamp(get_AoA(local_current_linear_vel.Unit), wing_info.min_aoa, wing_info.max_aoa)
+	-- temp
+	print(math.deg(AoA))
+
+	local dynamic_pressure = get_dynamic_pressure(local_speed)
 	local lift_coeff = get_lift_coeff(AoA, wing_info.lift_coeff_vs_AoA_curve)
+
+	-- Drag opposes aircraft velocity.
+	local local_drag_dir = -relative_wind_local.Unit
+
+	-- Lift is perpendicular to the relative wind and the wing's
+	-- lift plane.
+	--
 	
-	warn(math.deg(AoA), local_current_linear_vel)
-	
-	local drag_dir = local_current_linear_vel.Unit
-	-- lift is perpendicular to drag
-	-- 1st Cross product to get rightVector, 2nd to get perpendicular to linear vel
-	-- Prob could just simplify via CFrame.Angles, fromAxisAngle, or other thing
-	local lift_dir = -drag_dir:Cross(local_wing_cf.UpVector):Cross(-drag_dir)
-	
-	local lift_force = lift_dir * get_lift(lift_coeff, dynamic_pressure, wing_info.area)
-	local drag_force = drag_dir * get_drag(
+	local local_wing_up = wing_info.local_CoA_cf.UpVector
+	local local_lift_dir = local_wing_up - local_drag_dir * local_wing_up:Dot(local_drag_dir)
+--	local lift_dir = wing_up - drag_dir.Unit * wing_up:Dot(drag_dir)
+
+	--if lift_dir_magnitude <= EPSILON then
+	--	return Vector3.zero, Vector3.zero
+	--end
+
+	local lift = get_lift(lift_coeff, dynamic_pressure, wing_info.area)
+	local drag = get_drag(
 		wing_info.parasitic_drag_coeff,
 		lift_coeff,
 		dynamic_pressure,
@@ -252,25 +234,33 @@ local function apply_wing_aerodynamics(
 		wing_info.aspect_ratio,
 		wing_info.oswald_eff_factor
 	)
+	-- no wave drag 
+
+	-- World-space forces
+	local local_lift_force = local_lift_dir * lift
+	local local_drag_force = local_drag_dir * drag
+	local total_local_force = local_lift_force + local_drag_force
+	local total_local_torque = plane_cf.Position:Cross(total_local_force)
+	--local total_force_world = lift_force + drag_force
+
+	-- local_CoA_cf.Position is relative to aircraft CoM.
+	--local offset_world = plane_cf:VectorToWorldSpace(wing_info.local_CoA_cf.Position)
+--	local torque_world = offset_world:Cross(total_force_world)
 	
-	local la1, aa1 = add_force_at_offset_local(lift_force, wing_info.mass, local_wing_cf)
-	local la2, aa2 = add_force_at_offset_local(drag_force, wing_info.mass, local_wing_cf)
 	
-	-- TEMP SIMPLE TEST
-	local_linear_accel += la1 + la2
-	local_angular_accel += aa1 + aa2
-	
-	return
-		local_wing_cf:VectorToWorldSpace(local_linear_accel),
-		local_wing_cf:VectorToWorldSpace(local_angular_accel)
+	-- Debug
+	visualize_force(plane_cf.Position, wing_cf:VectorToWorldSpace(local_lift_force.Unit) * 5, Color3.fromRGB(0, 255, 0))
+	visualize_force(plane_cf.Position, wing_cf:VectorToWorldSpace(-local_drag_force.Unit) * 5, Color3.fromRGB(255, 0, 0))
+
+	return total_local_force, total_local_torque
 end
 
 --[[
 	TEMP:
 ]]
 function Physics.update_movement(
-	world_current_linear_vel: Vector3,
-	world_current_angular_vel: Vector3,
+	current_linear_vel: Vector3,
+	current_angular_vel: Vector3,
 	plane_cf: CFrame,
 	--goal_dir: Vector3,	-- treated like an instant cf after rotation, replacing flaps
 	plane_name: string,
@@ -278,39 +268,51 @@ function Physics.update_movement(
 	delta_time: number
 ): (Vector3, Vector3)
 	
-	local new_linear_vel: Vector3, new_angular_vel: Vector3 = Vector3.zero, Vector3.zero
-	local total_linear_accel: Vector3, total_angular_accel: Vector3 = Vector3.zero, Vector3.zero
+	local new_linear_vel, new_angular_vel = Vector3.zero, Vector3.zero
+	local total_force, total_torque = Vector3.zero, Vector3.zero
 	
 	local physics_info = PlaneInfos.physics[plane_name]
 	local mass = physics_info.mass
-
-	unit_throttle = math.clamp(unit_throttle, 0, 1)
 	
+	unit_throttle = math.clamp(unit_throttle, 0, 1)
 	-- goal_dir will be reached via angular velocity (hopefully)
 	local thrust_force = plane_cf.LookVector * physics_info.max_thrust * (unit_throttle * unit_throttle)
 	local weight_force = GRAVITY_ACCEL * mass
 
-	new_linear_vel += world_current_linear_vel + (total_linear_accel * delta_time)
-
+	total_force += thrust_force + weight_force
+	
 	-- Avoid divide by 0 errors for aerodynamic forces calculations.. anddd would probably be neglible anyways
-	if world_current_linear_vel.Magnitude <= EPSILON then
-		local total_force = thrust_force + weight_force
-		total_linear_accel = total_force / mass
-		return new_linear_vel, world_current_angular_vel
+	if current_linear_vel.Magnitude <= EPSILON then
+		new_linear_vel = current_linear_vel + (total_force / mass) * delta_time
+		-- no change in torque since only weight & thrust are simplified to apply directly at CoG
+		return new_linear_vel, current_angular_vel
 	end
 	
 	for _, wing_info in physics_info.wings do
 		-- TEMP
 		if wing_info._disabled == true then continue end
 		
-		-- accumulate world accel
-		local linear_accel, angular_accel = apply_wing_aerodynamics(plane_cf, wing_info, world_current_linear_vel)
-		total_linear_accel += linear_accel
-		total_angular_accel += angular_accel
+		-- accumulate force & torques local to each wing
+		local local_wing_force, local_wing_torque = apply_wing_aerodynamics(plane_cf, wing_info, current_linear_vel)
+		
+		--total_force += wing_force
+		--total_torque += wing_torque
 	end
 	
-	new_linear_vel += (total_linear_accel * delta_time)
-	new_angular_vel += (total_angular_accel * delta_time)
+--	print(total_force / mass)
+	
+	-- Temp approx
+	-- Since 'total_torque' is in world coords
+	local _world_inertia_tensor = plane_cf:VectorToWorldSpace(box_inertia_tensor(mass, Vector3.new(12.07, 3.84, 11.61)))
+	--local angular_momentum = _inertia_tensor * current_angular_vel
+	--local gyro_torque = angular_momentum:Cross(current_angular_vel)
+--	total_torque -= gyro_torque	
+
+
+	local linear_accel = total_force / mass
+	local angular_accel = total_torque / _world_inertia_tensor
+	new_linear_vel = current_linear_vel + (linear_accel * delta_time)
+	new_angular_vel = current_angular_vel + (angular_accel * delta_time)
 	return new_linear_vel, new_angular_vel
 end
 
