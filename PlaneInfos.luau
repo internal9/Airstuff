@@ -205,6 +205,10 @@ physics["f84g"] = {
 		[header("Main Wings")] = {
 			_disabled = false,
 			
+			-- test for simple inertia tensor
+			_thickness = 0.36,
+			_area = Vector3.new(4.77, 0.36, 2.8),
+			
 			-- TODO: RECHECK LATER
 			-- UNUSED
 			-- (Individual main wing weight + full wingtip fuel tank) * # of individual main wings
@@ -254,6 +258,8 @@ physics["f84g"] = {
 
 		[header("Vertical Stabilizer")] = {
 			_disabled = true,
+			_thickness = 0.4,
+			_area = Vector3.new(0.4, 1.8, 2.3),	-- account for cf rotation? need to?
 			
 			-- TODO: RECHECK LATER
 			mass = 36,
