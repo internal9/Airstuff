@@ -91,11 +91,11 @@ local function get_goal_cf(plane: MeshPart, goal_dir: Vector3, delta_time)--, de
 end
 
 -- simply move to velocity's normal vector (direction), don't confuse with in direction of a position or wahtever
-local function step_move(plane: MeshPart, scaled_vel: Vector3, scaled_angular_vel: Vector3, delta_time: number)
---	plane.Position += scaled_vel * delta_time
---	plane.Orientation += scaled_angular_vel * 180/math.pi * delta_time
---	warn(scaled_angular_vel)
-
+local function step_move(plane: MeshPart, scaled_vel: Vector3, angular_vel: Vector3, delta_time: number)
+	plane.Position += scaled_vel * delta_time
+	--plane.Orientation += angular_vel * 180/math.pi * delta_time
+	--print(angular_vel * 180/math.pi * delta_time)
+	
 	local new_x, new_y, new_z = Grid3D.to_cell_coords(grid.cell_size, plane.Position)
 	return new_x, new_y, new_z, plane.Position.Y <= 1	-- grid is 1 based index, so ground = 1 instead of 0
 end
@@ -116,17 +116,17 @@ local function step(delta_time: number)
 		local x1, y1, z1 = Grid3D.to_cell_coords(grid.cell_size, plane_model.Position)
 		
 		-- instead of flaps, just clamp the goal dir into a cframe and calculate using that
-		local current_vel = world:get(id, components.WorldVelocity)
-		local current_angular_vel = world:get(id, components.WorldAngularVelocity)
+		local current_linear_vel = world:get(id, components.LinearVelocity)
+		local current_angular_vel = world:get(id, components.AngularVelocity)
 		
 		local goal_cf = get_goal_cf(plane_model, goal_direction, delta_time)
 		
 		local new_vel, new_angular_vel = Physics.update_movement(
-			current_vel,
+			current_linear_vel,
 			current_angular_vel,
 			plane_model.CFrame,
 			plane_model.Name, 
-			1,
+			0,
 			delta_time
 		)
 		
@@ -138,14 +138,18 @@ local function step(delta_time: number)
 		--world:set(id, components.WorldAngularVelocity, new_angular_vel)
 		
 		local scaled_world_new_vel = new_vel * Constants.METER_TO_STUD_SCALED
-		local scaled_world_new_angular_vel = new_angular_vel * Constants.METER_TO_STUD_SCALED
-		
+		--local scaled_world_new_angular_vel = new_angular_vel * Constants.METER_TO_STUD_SCALED
+		--
 		local x2, y2, z2, into_ground = step_move(
 			plane_model,
 			scaled_world_new_vel,
-			scaled_world_new_angular_vel,
+			-- Rotation doesn't need to be scaled prob
+			new_angular_vel,
 			delta_time
 		)
+		
+		--world:set(id, components.LinearVelocity, new_vel)
+		--world:set(id, components.AngularVelocity, new_angular_vel)
 		
 		if true then continue end
 --		print((new_vel - current_vel).Magnitude / delta_time)
